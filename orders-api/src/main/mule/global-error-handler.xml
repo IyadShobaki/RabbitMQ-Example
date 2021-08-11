@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<error-handler
+		name="global-error-handler"
+		doc:id="4449a42e-8ecf-4eb4-b353-0e17e511cc77">
+		<on-error-propagate
+			enableNotifications="true"
+			logException="true"
+			doc:name="On Error Propagate"
+			doc:id="c1328fa2-6308-4996-b060-00c90f5f785e"
+			when='error.errorType.identifier == "CONNECTIVITY"'>
+			<choice
+				doc:name="Choice"
+				doc:id="15d77ed1-66e2-4a9d-bfb5-9b46e6cf5777">
+				<when
+					expression="#[(vars.attributes.headers['x-dlq-retry-count'] default 0) &lt; 2]">
+					<logger
+						level="WARN"
+						doc:name="WARN: Message Rejected"
+						doc:id="52b60827-1c55-41e8-9e44-480cc56fe3e5"
+						message="Rejecting message for retry, count #[vars.attributes.headers['x-dlq-retry-count']]" />
+					<amqp:reject
+						doc:name="Reject"
+						doc:id="124dc6dc-b553-413c-a29c-a2afe4c2859c"
+						ackId="#[vars.attributes.ackId]" />
+				</when>
+				<otherwise>
+					<logger
+						level="WARN"
+						doc:name="WARN: Moving to error-q"
+						doc:id="26362fe7-d315-436e-b18a-76d8dd2feb44"
+						message="Retries exhausted, moving message to error-q. Count #[vars.attributes.headers['x-dlq-retry-count']]" />
+					<set-variable
+						value="#['RETRIES EXHAUSTED']"
+						doc:name="cause"
+						doc:id="60e04341-f473-480a-b7b0-1083e2048077"
+						variableName="cause" />
+					<flow-ref
+						doc:name="move-messages-to-error-q-subflow"
+						doc:id="c3c0362d-c7e1-4fe9-a833-d6cadd028db4"
+						name="move-messages-to-error-q-subflow" />
+				</otherwise>
+			</choice>
+		</on-error-propagate>
+		<on-error-propagate
+			enableNotifications="true"
+			logException="true"
+			doc:name="On Error Propagate"
+			doc:id="df7de941-2179-43e1-b79a-37f979039e8f"
+			type="ANY">
+			<logger
+				level="ERROR"
+				doc:name="ERROR: Description"
+				doc:id="25dca7fb-98e9-46da-9a08-d3010852cee6"
+				message="Generic Error Occured #[error.description]" />
+			<set-variable
+				value='#["ERROR"]'
+				doc:name="cause"
+				doc:id="7292a301-8ceb-459d-aa9a-dd04aa43873d"
+				variableName="cause" />
+			<flow-ref
+				doc:name="move-messages-to-error-q-subflow"
+				doc:id="b76b89d8-002f-4984-bd74-36ed3ac82345"
+				name="move-messages-to-error-q-subflow" />
+		</on-error-propagate>
+	</error-handler>
+	<sub-flow
+		name="move-messages-to-error-q-subflow"
+		doc:id="e71b900a-705e-4abc-9b6a-821466a0101c">
+		<ee:transform
+			doc:name="Transform Message"
+			doc:id="b9f41f72-b13b-4e2c-ad7b-24a0b3f13421">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"appId": app.name,
+	"message": write(vars.backup, vars.backup.^mimeType),
+	"cause": vars.cause,
+	"description": error.description,
+	"type": (error.errorType default {}).namespace as String ++ ":" ++ (error.errorType default {}).identifier as String,
+	"attributes": vars.attributes
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Request"
+			doc:id="71db2773-3d44-450d-8013-be78cf08b8cd"
+			message="Publishing message to error-q" />
+		<amqp:publish
+			doc:name="error-q"
+			doc:id="4b94ead7-f37c-4dba-8851-e5aa9b92cfa1"
+			config-ref="AMQP_Config"
+			exchangeName='#[""]'
+			routingKeys='#[["error-q"]]' />
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Response"
+			doc:id="020f972c-c0ac-46c3-bc94-ac0da534613b"
+			message="Message published to error-q" />
+		<amqp:ack
+			doc:name="Ack"
+			doc:id="b84f6160-2c48-4249-afcd-009f2808e4db"
+			ackId="#[vars.attributes.ackId]" />
+	</sub-flow>
+</mule>

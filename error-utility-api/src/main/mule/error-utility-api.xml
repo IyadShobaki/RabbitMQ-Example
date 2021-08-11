@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<flow name="error-utility-apiFlow" doc:id="43d7c7a4-5a65-4592-9f1b-c6d01bcf7050" >
+		<amqp:listener doc:name="Listener" doc:id="61f7d0e5-e859-47f0-89f5-d661e6818273" config-ref="AMQP_Config" queueName="error-q" ackMode="MANUAL" recoverStrategy="NONE">
+			<amqp:listener-quality-of-service-config prefetchCount="1" />
+		</amqp:listener>
+		<logger level="INFO" doc:name="INFO: Request Received" doc:id="578e71d9-b381-4062-bd12-18a1b011a07d" message="Request Recieved" />
+		<logger level="INFO" doc:name="Logger" doc:id="89322357-7665-4ab0-98e0-0750d59eee73" message="#[output application/json --- payload]" />
+		<ee:transform doc:name="Transform Message" doc:id="1ae02524-37d1-450f-8004-15c13fc4841a" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+import * from dw::util::Timer
+---
+{
+	"systemname": payload.appId,
+	"correlationId": (payload.properties.correlationId default correlationId) as String,
+	"appId":(payload.appId default "") as String,
+	"type": payload."type",
+	"description": payload.description,
+	"created": now() as DateTime,
+	"cause": payload.cause default "POISONED",
+	"payload": payload.message as Binary {class: "byte[]"},
+	"exchange": (payload.attributes.headers."x-death"[0].exchange.stream default payload.attributes.envelope.exchange) as String,
+	"routingkey": (payload.attributes.headers."x-death"[0]."routing-keys"[0].stream default payload.attributes.envelope.routingkey) as String,
+	"mimetype": (payload.attributes.properties.contentType default "") as String,
+	"properties": write(payload.attributes.properties, 'application/json'),
+	"headers": write(payload.attributes.headers - "x-dlq-retry-count",'application/json'),
+	"retry": if(payload.cause == "RETRY_EXHAUSTED") "Y" else "N"
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="ackId" ><![CDATA[attributes.ackId]]></ee:set-variable>
+				<ee:set-variable variableName="backup" ><![CDATA[payload]]></ee:set-variable>
+				<ee:set-variable variableName="attributes" ><![CDATA[attributes]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="d7701c8b-7ace-4c3d-b33c-4e9c8e885d02" message="#[output application/json --- payload]"/>
+		<logger level="INFO" doc:name="INFO: Outbound Request" doc:id="e08e4692-289f-4b4b-aa45-3b95b30de8a1" message="Inserting records in error db"/>
+		<db:insert doc:name="Error DB" doc:id="ffe177b1-935d-47bd-a52e-10475dd4be42" config-ref="Database_Config" >
+			<db:sql ><![CDATA[INSERT INTO ERROR_DB (SYSTEM_NAME, CORRELATION_ID, 
+CREATED_TIMESTAMP, EXCHANGE, ROUTINGKEY, PAYLOAD,
+MIME_TYPE, HEADERS, PROPERTIES, TYPE, DESCRIPTION, CAUSE, RETRY_FLAG)
+ VALUES (:systemname,:correlationId, :created,
+:exchange, :routingkey, :payload, :mimetype, :headers, :properties,
+:type, :description, :cause, :retry)]]></db:sql>
+			<db:input-parameters ><![CDATA[#[payload]]]></db:input-parameters>
+		</db:insert>
+		<logger level="INFO" doc:name="INFO: Outbound Response" doc:id="10e9079f-3531-478d-99fc-2ebe9574efda" message="Data inserted successfully in error db"/>
+		<amqp:ack doc:name="Ack" doc:id="b49f2877-369b-4589-a197-b7af833a3e08" ackId="#[vars.ackId]" />
+		<logger level="INFO" doc:name="INFO: Request Completed" doc:id="6f9475d3-a74b-4d2e-be54-a5a5636fa1f5" message="Request Completed"/>
+		<error-handler >
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="8acb72b3-8575-4a2f-90ff-57ddd55f5d30" type="ANY" >
+				<logger level="ERROR" doc:name="ERROR: Error Occurred" doc:id="5b9771dd-b866-415b-b92e-d84a3af2c13b" message="Error Occurred in Error Utility API #[error.description]" />
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+</mule>

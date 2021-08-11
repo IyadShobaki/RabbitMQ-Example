@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<import doc:name="Import" doc:id="16b3f328-38c1-45fb-8a10-fd541a010510" file="global-error-handler.xml" />
+	<configuration doc:name="Configuration" doc:id="a54458b9-a846-4f64-9e68-a87d89e4df0a" defaultErrorHandler-ref="global-error-handler" />
+	<flow
+		name="orders-apiFlow"
+		doc:id="6e5d5f0c-e15d-42d4-be24-723a97ca1098">
+		<amqp:listener
+			doc:name="Listener"
+			doc:id="67731ff2-4661-4ee9-829c-f9236e2e4013"
+			config-ref="AMQP_Config"
+			queueName="orders-q" recoverStrategy="NONE" ackMode="MANUAL"/>
+		<ee:transform
+			doc:name="Backup"
+			doc:id="a0bdf087-f83f-42a8-b112-d65ff70759d1">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="attributes"><![CDATA[%dw 2.0
+output application/json
+---
+attributes]]></ee:set-variable>
+				<ee:set-variable variableName="backup"><![CDATA[payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<raise-error
+			doc:name="MYCOMPANY:CONNECTIVITY"
+			doc:id="3cc12ee4-ec1a-4f40-97cc-aaab8843c551"
+			type="MYCOMPANY:CONNECTIVITY"
+			description="Connectivity Error Occurred" />
+	</flow>
+</mule>

@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<flow
+		name="dlq-utility-apiFlow"
+		doc:id="dee53f44-9292-4af4-a082-1df84944ea7d">
+		<amqp:listener
+			doc:name="Listener"
+			doc:id="61d1f9e3-f7e8-499b-bb4a-c616e21f2de9"
+			config-ref="AMQP_Config"
+			queueName="dead-letter-q"
+			ackMode="MANUAL">
+			<amqp:listener-quality-of-service-config
+				prefetchCount="1" />
+		</amqp:listener>
+		<logger
+			level="INFO"
+			doc:name="INFO: Request Received"
+			doc:id="d013bb61-1eba-4400-8e4b-04ef726c646c"
+			message="Request Received" />
+		<logger
+			level="INFO"
+			doc:name="Logger"
+			doc:id="eaa100be-635b-4d1a-93a3-1041635d35a3"
+			message="#[output application/json --- attributes]" />
+		<set-variable
+			value="#[now() as DateTime]"
+			doc:name="currentTimestamp"
+			doc:id="ccb69481-5f1e-426e-853f-8fe09f6f64bd"
+			variableName="currentTimestamp" />
+		<ee:transform
+			doc:name="Transform Message"
+			doc:id="e079926c-594d-4099-8c10-06d377635d6f">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+import * from dw::util::Timer
+var backoff = 10 * (4 pow (attributes.headers['x-dlq-retry-count'] as Number default 0))
+fun recursive(object) = if(typeOf(object) == 'Array') (object map recursive(object)) else object.stream
+---
+{
+	"systemname": app.name,
+	"correlationId": (attributes.properties.correlationId default correlationId) as String,
+	"payload": write(payload, payload.^mediaType) as Binary {class: "byte[]"},
+	"exchange": (attributes.headers."x-death"[0].exchange.stream default "") as String,
+	"queue": (attributes.headers."x-death"[0]."routing-keys"[0].stream default "") as String,
+	"routingkey": (attributes.headers."x-death"[0].queue.stream default "") as String,
+	"expiry": vars.currentTimestamp + "PT$(backoff)S",
+	"created": vars.currentTimestamp,
+	"mimetype": (attributes.properties.contentType default "") as String,
+	"properties": write(attributes.properties, 'application/json'),
+	"headers": write((attributes.headers mapObject ((value,key,index) -> (key): recursive(value)) -- {"x-dlq-retry-count": null, "x-death": null} ++ {"x-dlq-retry-count": ((attributes.headers['x-dlq-retry-count'] as Number default 0) + 1)}),'application/json')
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="ackId"><![CDATA[attributes.ackId]]></ee:set-variable>
+				<ee:set-variable variableName="backup"><![CDATA[payload]]></ee:set-variable>
+				<ee:set-variable variableName="attributes"><![CDATA[attributes]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger
+			level="INFO"
+			doc:name="Logger"
+			doc:id="3ac2042f-1258-49d0-ac6b-6fca2c10a2c7"
+			message="#[output application/json --- payload]" />
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Request"
+			doc:id="f26aa38d-d245-4f93-a281-12e8972ab17e"
+			message="Inserting records in dehydration db" />
+		<db:insert
+			doc:name="Dehydration DB"
+			doc:id="ef37ada5-1139-4ef9-9e4c-64cc24dca840"
+			config-ref="Database_Config">
+			<db:sql ><![CDATA[INSERT INTO DEHYDRATION_DB (SYSTEM_NAME, CORRELATION_ID, CREATED_TIMESTAMP,EXPIRY_TIMESTAMP, EXCHANGE, ROUTINGKEY, PAYLOAD,
+MIME_TYPE, HEADERS, PROPERTIES) VALUES (:systemname,:correlationId, :created,
+:expiry, :exchange, :routingkey, :payload, :mimetype, :headers, :properties)]]></db:sql>
+			<db:input-parameters><![CDATA[#[payload]]]></db:input-parameters>
+		</db:insert>
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Response"
+			doc:id="505770a8-f0ee-4f47-8fe2-02a6e6fff883"
+			message="Data inserted successfully in dehydration db" />
+		<amqp:ack
+			doc:name="Ack"
+			doc:id="98a82200-1efb-4eeb-91cd-4676f13eeea4"
+			ackId="#[vars.ackId]" />
+		<logger
+			level="INFO"
+			doc:name="INFO: Request Completed"
+			doc:id="01ed86be-1f7e-4819-8483-f90f579b49fe"
+			message="Request Completed" />
+		<error-handler>
+			<on-error-propagate
+				enableNotifications="true"
+				logException="true"
+				doc:name="On Error Propagate"
+				doc:id="14825b68-35e6-4588-9bc9-f463b0f392e3"
+				type="ANY">
+				<logger
+					level="ERROR"
+					doc:name="ERROR: Error Occurred"
+					doc:id="6baa2870-f0a2-4ff9-aa18-d2d49aa80275"
+					message="Error Occurred #[error.description]" />
+				<ee:transform
+					doc:name="Transform Message"
+					doc:id="f036d2de-7fec-4d8b-a099-310808fccb7d">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"appId": app.name,
+	"message": write(vars.backup, vars.backup.^mimeType),
+	"cause": "ERROR",
+	"description": error.description,
+	"type": (error.errorType default {}).namespace as String ++ ":" ++ (error.errorType default {}).identifier as String,
+	"attributes": vars.attributes
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<amqp:publish
+					doc:name="Publish"
+					doc:id="34b5612b-2801-4d1a-984b-f3b1adca9870"
+					config-ref="AMQP_Config"
+					exchangeName='#[""]'
+					routingKeys='#[["error-q"]]' />
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+</mule>

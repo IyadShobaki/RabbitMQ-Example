@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd">
+	<flow
+		name="retryable-messages-utilityFlow"
+		doc:id="e7579b8b-07b4-4c78-8826-59cc6cfac77a">
+		<scheduler
+			doc:name="Scheduler"
+			doc:id="8b73ce63-b6b9-4c3b-b66b-b5c06c98e723">
+			<scheduling-strategy>
+				<fixed-frequency
+					frequency="10000" />
+			</scheduling-strategy>
+		</scheduler>
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Request"
+			doc:id="e7111087-44ed-46cd-9e26-3e0ad3522927" message="Retrieving records from error_db"/>
+		<db:select
+			doc:name="Retryable Messages"
+			doc:id="8cb4e57f-3bde-4e9e-96ec-743a070214ea"
+			config-ref="Database_Config">
+			<db:sql><![CDATA[SELECT * FROM ERROR_DB WHERE RETRY_FLAG = :retry]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	"retry": "Y"
+}]]]></db:input-parameters>
+		</db:select>
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Response"
+			doc:id="491c48a1-cb4c-4143-9a86-d5be6e37fd42" message="Records retrieved from error_db"/>
+		<choice
+			doc:name="Choice"
+			doc:id="4b5283e1-a3a2-4d92-a2d5-04e073aa5d7f">
+			<when expression="#[!isEmpty(payload)]">
+				<foreach
+					doc:name="For Each"
+					doc:id="5de1ac54-70c3-40ac-b897-dd6b7ba90fb9"
+					collection="#[payload]">
+					<ee:dynamic-evaluate
+						doc:name="Dynamic Evaluate"
+						doc:id="9a847436-3b21-4867-bda7-7d93695b88b7"
+						expression='#["output " ++ (payload.MIME_TYPE as String splitBy ";")[0]++ " --- read(payload.PAYLOAD, payload.MIME_TYPE)"]'
+						target="message" />
+					<set-variable
+						value="#[output application/json --- read(payload.PROPERTIES as String, 'application/json')]"
+						doc:name="properties"
+						doc:id="72271053-0377-4e16-8065-19fc8be12ba7"
+						variableName="properties" />
+					<set-variable
+						value="#[output application/json --- read(payload.HEADERS as String, 'application/json')]"
+						doc:name="headers"
+						doc:id="c62630df-2ebf-4d85-8259-f6e57d63f8cd"
+						variableName="headers" />
+					<logger
+						level="INFO"
+						doc:name="INFO: Outbound Request"
+						doc:id="21b413ce-7f78-47ea-b103-e9a14f2142a4" message="Publishing message to queue"/>
+					<amqp:publish
+						doc:name="Publish"
+						doc:id="e9b9eb6f-89ea-4a4a-8db2-36500d41e79e"
+						config-ref="AMQP_Config"
+						exchangeName='#[""]'
+						routingKeys="#[[payload.ROUTINGKEY]]">
+						<amqp:message
+							properties="#[output application/json --- read(payload.PROPERTIES, 'application/json') - &quot;deliveryMode&quot;]">
+							<amqp:body><![CDATA[#[vars.message]]]></amqp:body>
+							<amqp:headers><![CDATA[#[output application/json --- read(payload.HEADERS as String, 'application/json')]]]></amqp:headers>
+						</amqp:message>
+					</amqp:publish>
+					<logger
+						level="INFO"
+						doc:name="INFO: Outbound Response"
+						doc:id="eeb29ffa-52c3-44ea-8748-5bbb033761c2" message="Message published to queue"/>
+					<logger
+						level="INFO"
+						doc:name="Logger"
+						doc:id="52547237-2315-42d8-ae80-d307c4407b25" message="#[output application/json --- payload]"/>
+					<logger level="INFO" doc:name="INFO: Outbound Request" doc:id="3f1d6ded-29e8-4280-9895-e4c16701bd74" message="Updating record in error_db"/>
+					<db:update
+						doc:name="Update"
+						doc:id="2ce579e6-526d-49a0-a61c-2c46d277ca6c"
+						config-ref="Database_Config">
+						<db:sql><![CDATA[UPDATE ERROR_DB SET RETRY_FLAG = :retry WHERE ID = :id]]></db:sql>
+						<db:input-parameters><![CDATA[#[{
+	"id": payload.ID,
+	"retry": "I"
+}]]]></db:input-parameters>
+					</db:update>
+					<logger
+						level="INFO"
+						doc:name="INFO: Outbound Response"
+						doc:id="5a7fab8a-224d-43b0-b957-5cfcb36633b8" message="Record updated in error_db"/>
+				</foreach>
+				<logger
+					level="INFO"
+					doc:name="INFO: Request Completed"
+					doc:id="879fbb9e-c584-4a85-9627-a5f56352706c" message="Messages published"/>
+			</when>
+			<otherwise>
+				<logger
+					level="INFO"
+					doc:name="INFO: No Records Present"
+					doc:id="5c9437b7-e114-4ee4-b4c4-859ac61d1f40"
+					message="No records present in error_db" />
+			</otherwise>
+		</choice>
+	</flow>
+</mule>

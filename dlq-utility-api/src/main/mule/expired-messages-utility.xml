@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule
+	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd">
+	<flow
+		name="expired-messages-utilityFlow"
+		doc:id="c82990d8-7d55-4db5-9f71-ccdf4ac3ccc1">
+		<scheduler
+			doc:name="Scheduler"
+			doc:id="bc2347b1-4c78-444c-a1e9-0baaa9cb64cc">
+			<scheduling-strategy>
+				<fixed-frequency
+					frequency="100000"
+					startDelay="1000" />
+			</scheduling-strategy>
+		</scheduler>
+		<logger
+			level="INFO"
+			doc:name="INFO: Outbound Request"
+			doc:id="e747327a-b3b6-4658-991c-7793fe97e986" message="Retrieving records from dehydration_db"/>
+		<db:select
+			doc:name="Expired records"
+			doc:id="0755787d-6bb8-4b7c-82dd-1de1e27e690d"
+			config-ref="Database_Config">
+			<db:sql><![CDATA[SELECT * FROM DEHYDRATION_DB WHERE EXPIRY_TIMESTAMP < CURRENT_TIMESTAMP]]></db:sql>
+			<db:input-parameters><![CDATA[#[{}]]]></db:input-parameters>
+		</db:select>
+		<logger level="INFO" doc:name="INFO: Outbound Response" doc:id="66d2a8bf-126e-40cb-a660-ee0f7d9909a6" message="Records retrieved from dehydration_db"/>
+		<choice
+			doc:name="Choice"
+			doc:id="6e5cdc19-7aae-457e-b2cb-8ed0203b51d3">
+			<when expression="#[!isEmpty(payload)]">
+				<foreach
+					doc:name="For Each"
+					doc:id="e1a2838b-bbcc-4cea-94e5-f012673dfec7"
+					collection="#[payload]">
+					<ee:dynamic-evaluate
+						doc:name="Dynamic Evaluate"
+						doc:id="d5805646-433b-46b8-943d-f3b32fb563cd"
+						expression='#["output " ++ (payload.MIME_TYPE as String splitBy ";")[0]++ " --- read(payload.PAYLOAD, payload.MIME_TYPE)"]'
+						target="message" />
+					<set-variable
+						value="#[output application/json --- read(payload.PROPERTIES as String, 'application/json')]"
+						doc:name="properties"
+						doc:id="7bfbd435-e241-4c9c-8f3c-1b110753005a"
+						variableName="properties" />
+					<set-variable
+						value="#[output application/json --- read(payload.HEADERS as String, 'application/json')]"
+						doc:name="headers"
+						doc:id="17a85342-3e69-43be-a1eb-18a0779ce0b2"
+						variableName="headers" />
+					<logger level="INFO" doc:name="INFO: Outbound Request" doc:id="1f2b923b-7b6b-4546-a878-9aab5ac503d8" message="Publishing message to queue"/>
+					<amqp:publish
+						doc:name="Publish"
+						doc:id="dbb1734a-d68d-40f1-8abb-a8b2a0fdd074"
+						config-ref="AMQP_Config"
+						exchangeName='#[""]'
+						routingKeys="#[[payload.ROUTINGKEY]]">
+						<amqp:message>
+							<amqp:body><![CDATA[#[vars.message]]]></amqp:body>
+							<amqp:properties
+								contentType='#[vars.properties."contentType"]'
+								contentEncoding='#[vars.properties."contentEncoding"]'
+								priority='#[vars.properties."priority"]'
+								correlationId='#[vars.properties."correlationId"]'
+								messageId='#[vars.properties."messageId"]'
+								replyTo='#[vars.properties."replyTo"]'
+								expiration='#[vars.properties."expiration"]'
+								userId='#[vars.properties."userId"]'
+								appId='#[vars.properties."appId"]'
+								clusterId='#[vars.properties."clusterId"]'
+								timestamp='#[vars.properties."timestamp"]'
+								type='#[vars.properties."type"]' />
+							<amqp:headers><![CDATA[#[output application/json --- read(payload.HEADERS as String, 'application/json')]]]></amqp:headers>
+						</amqp:message>
+					</amqp:publish>
+					<logger level="INFO" doc:name="INFO: Outbound Response" doc:id="07b7c7ee-9980-47de-81cc-8ccd352f8582" message="Message published to queue"/>
+					<logger
+						level="INFO"
+						doc:name="Logger"
+						doc:id="e13948ef-2356-47a8-9a91-6554a4af6408" message="#[output application/json --- payload]"/>
+					<logger level="INFO" doc:name="INFO: Outbound Request" doc:id="41f78bec-be77-4ada-be33-e8c95af0f33b" message="Deleting record from dehydration_db"/>
+					<db:delete
+						doc:name="Delete"
+						doc:id="e94ab580-f3f8-4a3b-807a-597b5cc1c1d3"
+						config-ref="Database_Config">
+						<db:sql><![CDATA[DELETE FROM DEHYDRATION_DB WHERE ID = :Id]]></db:sql>
+						<db:input-parameters><![CDATA[#[{
+	"Id": payload.ID
+}]]]></db:input-parameters>
+					</db:delete>
+					<logger
+						level="INFO"
+						doc:name="INFO: Outbound Response"
+						doc:id="e2f44d55-8062-4ab5-87fa-78107dfc2496" message="Record deleted from dehydration_db"/>
+				</foreach>
+				<logger
+					level="INFO"
+					doc:name="INFO: Request Completed"
+					doc:id="778bd0c3-5e7f-4916-aed6-9d65e2278528" message="Messages published"/>
+			</when>
+			<otherwise>
+				<logger
+					level="INFO"
+					doc:name="INFO: No Records Present"
+					doc:id="cbfab0be-4544-4f81-b102-10c1f75245da"
+					message="No records present in dehydration_db" />
+			</otherwise>
+		</choice>
+	</flow>
+</mule>

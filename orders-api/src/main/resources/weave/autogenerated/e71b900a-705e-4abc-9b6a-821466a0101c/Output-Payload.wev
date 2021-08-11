@@ -1,0 +1,11 @@
+%dw 2.0
+
+type auto_e71b900a_705e_4abc_9b6a_821466a0101c_Output_Payload = {|
+  appId: String | Null, 
+  message: String | Binary, 
+  cause: String, 
+  description: String | Null, 
+  "type": String, 
+  attributes: Null
+|}
+
