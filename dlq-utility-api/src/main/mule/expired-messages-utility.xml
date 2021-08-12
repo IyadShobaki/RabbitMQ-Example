@@ -19,8 +19,8 @@ http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amq
 			doc:id="bc2347b1-4c78-444c-a1e9-0baaa9cb64cc">
 			<scheduling-strategy>
 				<fixed-frequency
-					frequency="100000"
-					startDelay="1000" />
+					frequency="10000"
+					startDelay="100" />
 			</scheduling-strategy>
 		</scheduler>
 		<logger

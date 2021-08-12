@@ -19,15 +19,11 @@ http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/cu
 			doc:id="61d1f9e3-f7e8-499b-bb4a-c616e21f2de9"
 			config-ref="AMQP_Config"
 			queueName="dead-letter-q"
-			ackMode="MANUAL">
+			ackMode="MANUAL" recoverStrategy="NONE">
 			<amqp:listener-quality-of-service-config
 				prefetchCount="1" />
 		</amqp:listener>
-		<logger
-			level="INFO"
-			doc:name="INFO: Request Received"
-			doc:id="d013bb61-1eba-4400-8e4b-04ef726c646c"
-			message="Request Received" />
+		<logger level="INFO" doc:name="INFO: Request Received" doc:id="d013bb61-1eba-4400-8e4b-04ef726c646c" message="Request Received" />
 		<logger
 			level="INFO"
 			doc:name="Logger"
@@ -44,7 +40,6 @@ http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/cu
 			<ee:message>
 				<ee:set-payload><![CDATA[%dw 2.0
 output application/java
-import * from dw::util::Timer
 var backoff = 10 * (4 pow (attributes.headers['x-dlq-retry-count'] as Number default 0))
 fun recursive(object) = if(typeOf(object) == 'Array') (object map recursive(object)) else object.stream
 ---
@@ -55,11 +50,12 @@ fun recursive(object) = if(typeOf(object) == 'Array') (object map recursive(obje
 	"exchange": (attributes.headers."x-death"[0].exchange.stream default "") as String,
 	"queue": (attributes.headers."x-death"[0]."routing-keys"[0].stream default "") as String,
 	"routingkey": (attributes.headers."x-death"[0].queue.stream default "") as String,
-	"expiry": vars.currentTimestamp + "PT$(backoff)S",
-	"created": vars.currentTimestamp,
+	"expiry": (vars.currentTimestamp + "PT$(backoff)S") as String {format: "yyyy-MM-dd HH:mm:ss.S"},
+	"created": vars.currentTimestamp as String {format: "yyyy-MM-dd HH:mm:ss.S"},
 	"mimetype": (attributes.properties.contentType default "") as String,
 	"properties": write(attributes.properties, 'application/json'),
 	"headers": write((attributes.headers mapObject ((value,key,index) -> (key): recursive(value)) -- {"x-dlq-retry-count": null, "x-death": null} ++ {"x-dlq-retry-count": ((attributes.headers['x-dlq-retry-count'] as Number default 0) + 1)}),'application/json')
+	//"headers": write((attributes.headers ++ {"x-dlq-retry-count": ((attributes.headers['x-dlq-retry-count'] as Number default 0) + 1)}),'application/json')
 }]]></ee:set-payload>
 			</ee:message>
 			<ee:variables>

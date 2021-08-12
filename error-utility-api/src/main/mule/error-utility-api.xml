@@ -1,22 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+<mule
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
 	xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp"
-	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
 http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
 http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
 http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
-	<flow name="error-utility-apiFlow" doc:id="43d7c7a4-5a65-4592-9f1b-c6d01bcf7050" >
-		<amqp:listener doc:name="Listener" doc:id="61f7d0e5-e859-47f0-89f5-d661e6818273" config-ref="AMQP_Config" queueName="error-q" ackMode="MANUAL" recoverStrategy="NONE">
-			<amqp:listener-quality-of-service-config prefetchCount="1" />
+	<flow
+		name="error-utility-apiFlow"
+		doc:id="43d7c7a4-5a65-4592-9f1b-c6d01bcf7050">
+		<amqp:listener
+			doc:name="Listener"
+			doc:id="61f7d0e5-e859-47f0-89f5-d661e6818273"
+			config-ref="AMQP_Config"
+			queueName="error-q"
+			ackMode="MANUAL"
+			recoverStrategy="NONE">
+			<amqp:listener-quality-of-service-config
+				prefetchCount="1" />
 		</amqp:listener>
-		<logger level="INFO" doc:name="INFO: Request Received" doc:id="578e71d9-b381-4062-bd12-18a1b011a07d" message="Request Recieved" />
-		<logger level="INFO" doc:name="Logger" doc:id="89322357-7665-4ab0-98e0-0750d59eee73" message="#[output application/json --- payload]" />
+		<logger
+			level="INFO"
+			doc:name="INFO: Request Received"
+			doc:id="578e71d9-b381-4062-bd12-18a1b011a07d"
+			message="Request Recieved" />
+		<logger
+			level="INFO"
+			doc:name="Logger"
+			doc:id="89322357-7665-4ab0-98e0-0750d59eee73"
+			message="#[output application/json --- payload]" />
 		<ee:transform doc:name="Transform Message" doc:id="1ae02524-37d1-450f-8004-15c13fc4841a" >
 			<ee:message >
 				<ee:set-payload ><![CDATA[%dw 2.0
 output application/java
-import * from dw::util::Timer
 ---
 {
 	"systemname": payload.appId,
@@ -24,15 +45,15 @@ import * from dw::util::Timer
 	"appId":(payload.appId default "") as String,
 	"type": payload."type",
 	"description": payload.description,
-	"created": now() as DateTime,
+	"created": now() as DateTime as String {format: "yyyy-MM-dd HH:mm:ss.S"},
 	"cause": payload.cause default "POISONED",
 	"payload": payload.message as Binary {class: "byte[]"},
 	"exchange": (payload.attributes.headers."x-death"[0].exchange.stream default payload.attributes.envelope.exchange) as String,
-	"routingkey": (payload.attributes.headers."x-death"[0]."routing-keys"[0].stream default payload.attributes.envelope.routingkey) as String,
+	"routingkey": (payload.attributes.headers."x-death"[0]."routing-keys"[0].stream.stream default payload.attributes.envelope.routingKey) as String,
 	"mimetype": (payload.attributes.properties.contentType default "") as String,
 	"properties": write(payload.attributes.properties, 'application/json'),
 	"headers": write(payload.attributes.headers - "x-dlq-retry-count",'application/json'),
-	"retry": if(payload.cause == "RETRY_EXHAUSTED") "Y" else "N"
+	"retry": if(payload.cause == "RETRIES EXHAUSTED") "Y" else "N"
 }]]></ee:set-payload>
 			</ee:message>
 			<ee:variables >
